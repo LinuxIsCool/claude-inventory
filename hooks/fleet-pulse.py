@@ -106,8 +106,13 @@ def main():
     unbacked = 0
     critical_issues = []
 
+    # Venue/service types are location references, not fleet devices
+    SKIP_TYPES = {"venues", "services"}
+
     for type_dir in ASSETS_ROOT.iterdir():
         if not type_dir.is_dir():
+            continue
+        if type_dir.name in SKIP_TYPES:
             continue
         for f in type_dir.glob("*.md"):
             fm = parse_frontmatter(f)
