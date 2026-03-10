@@ -58,41 +58,70 @@ Generate a fleet summary by aggregating frontmatter across all assets.
 
 ## Display Format
 
-Render browse results as grouped markdown tables:
+Render browse results as grouped markdown tables with enriched columns:
 
 ```
-## Fleet Overview (15 assets)
+## Fleet Overview (23 assets)
 
-### Machines (4)
-| ID | Name | Role | OS | Status | Health |
-|----|------|------|----|--------|--------|
-| legion | Legion T5 | primary | CachyOS | active | 85 |
+### Machines (5)
+| ID | Name | Type | Status | Backup | Backup Date | Priority | Next Step |
+|----|------|------|--------|--------|-------------|----------|-----------|
+| legion | Lenovo Legion T5 | desktop | active | partial | — | critical | Set up Borg backup |
 
-### Drives (8)
-| ID | Capacity | Used | Machine | Backup | FS |
-|----|----------|------|---------|--------|----|
-| 24tb-expansion | 21.8TB | 2.7TB | legion | backed-up | btrfs |
+### Drives (13)
+| ID | Name | Type | FS | Capacity | Used | Used% | Machine | Backup | Backup Date | Priority | Next Step |
+|----|------|------|----|---------:|-----:|------:|---------|--------|-------------|----------|-----------|
+| nvme0-system | Kingston SNV2S500G | int-nvme | btrfs | 462G | 34G | 7% | legion | partial | — | critical | Set up Borg |
+
+### Mobile (3)
+| ID | Name | Status | Backup | Backup Date | Priority | Next Step |
+|----|------|--------|--------|-------------|----------|-----------|
+| samsung-s10 | Galaxy S10 | active | partial | — | important | Full backup |
+
+### Network (2)
+| ID | Name | Type | Status | Priority |
+|----|------|------|--------|----------|
+| telus-router | TELUS Gateway | router | active | critical |
 ```
+
+## Computed Fields
+
+- **Used%**: Computed from `used / capacity * 100`. If `used` has `~` prefix, mark percentage as approximate too.
+  Show `?` if either `used` or `capacity` is missing/empty.
+
+## Drive Type Abbreviations
+
+| Subtype | Display |
+|---------|---------|
+| internal-nvme | int-nvme |
+| internal-ssd | int-ssd |
+| internal-sata | int-sata |
+| internal-hdd | int-hdd |
+| external-ssd | ext-ssd |
+| external-hdd | ext-hdd |
+| usb-stick | usb-stick |
 
 Stats output uses a compact summary block:
 
 ```
 ## Fleet Stats
-- Assets: 15 total (4 machines, 8 drives, 2 mobile, 1 network)
-- Status: 12 active, 2 stored, 1 decommissioned
-- Backup: 75% coverage (6/8 data assets backed up)
-- Capacity: 45.6TB total, 12.3TB used, 33.3TB free
-- Health: 82 average (fleet composite)
-- Stale: 2 assets not seen in 30+ days
+- Assets: 23 total (5 machines, 13 drives, 3 mobile, 2 network)
+- Status: 18 active, 3 stored, 2 infra
+- Backup: 60% coverage (6/10 data assets fully backed up)
+- Capacity: ~30TB total, ~11TB used, ~19TB free
+- Capacity alerts: drives above 80% used
+- Unbacked: assets with backup_status = none
+- Health: 75 average (fleet composite)
+- Stale: assets not seen in 30+ days
 ```
 
 ## Column Reference by Type
 
-- **Machines**: ID, Name, Role, OS, Status, Health
-- **Drives**: ID, Capacity, Used, Machine, Backup, FS
-- **Mobile**: ID, Name, OS, Status, Carrier, Last Seen
-- **Network**: ID, Name, Type, IP, Status, Connected To
-- **Venues**: ID, Name, Location, Next Event, Status
+- **Machines**: ID, Name, Type (desktop/laptop/server), Status, Backup, Backup Date, Priority, Next Step
+- **Drives**: ID, Name, Type (int-nvme/ext-hdd/etc), FS, Capacity, Used, Used%, Machine, Backup, Backup Date, Priority, Next Step
+- **Mobile**: ID, Name, Status, Backup, Backup Date, Priority, Next Step
+- **Network**: ID, Name, Type, Status, Priority
+- **Venues**: ID, Name, Location, Next Event, Status (excluded from fleet view)
 
 ## Notes
 

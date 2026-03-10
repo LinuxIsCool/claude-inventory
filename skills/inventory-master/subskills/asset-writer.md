@@ -28,6 +28,9 @@ last_seen: {today}
 contains_data: true
 data_status: needs-inventory
 backup_status: none
+backup_date: null
+backup_target: null
+next_step: ""
 priority: {critical|important|optional}
 manufacturer: "{mfg}"
 model: "{model}"
@@ -60,7 +63,10 @@ services: []
 
 ### Drive
 
-Type-specific fields: `device`, `uuid`, `filesystem`, `capacity`, `used`, `mount_point`, `compression`, `machine` (slug ref), `consolidation_phase`.
+Type-specific fields: `device`, `uuid`, `filesystem`, `capacity`, `used`, `mount_point`, `compression`, `machine` (slug ref or `portable` for external drives), `consolidation_phase`.
+
+Subtype must be one of: `internal-nvme`, `internal-ssd`, `internal-sata`, `internal-hdd`, `external-ssd`, `external-hdd`, `usb-stick`.
+Use `lsblk TRAN` column to distinguish: nvme/sata = internal, usb = external.
 
 ### Mobile
 
@@ -107,6 +113,9 @@ On update, only touch fields that have new data. Never blank out a field that al
 
 - `id` must match the filename slug
 - `type` must be one of: machine, drive, mobile, venue, network, service
-- `status` must be one of: active, inactive, decommissioned, unknown
-- `priority` must be one of: critical, important, optional
+- `status` must be one of: active, inactive, stored, decommissioned, unknown
+- `priority` must be one of: critical, important, optional, low
+- `backup_status` must be one of: backed-up, partial, none, null (for non-data assets)
+- `backup_date` must be ISO date string or null
+- `next_step` should be a brief actionable string
 - Relationships must reference valid slugs (warn on dangling refs, don't block)
