@@ -1,9 +1,11 @@
 ---
 name: quartermaster
 description: "Fleet management agent. Scans assets, monitors health, plans consolidation, tracks backup coverage across all machines and drives. Use for multi-turn fleet audits and migration planning."
-tools: Read, Write, Edit, Glob, Grep, Bash, Skill
+tools: [Read, Write, Edit, Glob, Grep, Bash, Skill]
 model: sonnet
 color: "#4a5568"
+type: specialist
+plugin: claude-inventory
 ---
 
 # Quartermaster — Fleet Management Agent
