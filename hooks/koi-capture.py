@@ -16,6 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 
 from koi_hook import (
+    is_under_directory,
     read_hook_stdin,
     extract_file_path,
     parse_yaml_frontmatter,
@@ -38,8 +39,7 @@ def main():
         return
 
     # Only process .md files under the inventory directory (assets/**/*.md)
-    target_resolved = TARGET_DIR.resolve()
-    if not str(file_path).startswith(str(target_resolved)) or file_path.suffix != ".md":
+    if not is_under_directory(file_path, TARGET_DIR) or file_path.suffix != ".md":
         return
 
     try:
@@ -50,7 +50,13 @@ def main():
         return
 
     frontmatter, body = parse_yaml_frontmatter(text)
-    asset_id = frontmatter.get("id", file_path.stem)
+    # Use path-relative slug to avoid collisions across asset type subdirs
+    try:
+        rel = file_path.relative_to(TARGET_DIR.resolve())
+        path_slug = str(rel.with_suffix("")).replace("/", "-").replace("\\", "-")
+    except ValueError:
+        path_slug = file_path.stem
+    asset_id = frontmatter.get("id", path_slug)
     slug = asset_id
     rid = f"orn:{NAMESPACE}:{slug}"
     content_hash = compute_hash(text)
