@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "legion-hooks @ git+https://github.com/LinuxIsCool/legion-plugins.git#subdirectory=packages/legion-hooks",
+#     "legion-hooks @ file:///home/shawn/.claude/plugins/local/legion-plugins/packages/legion-hooks",
 # ]
 # ///
 """KOI capture hook for claude-inventory — pushes asset cards to KOI on write.
