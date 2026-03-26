@@ -1,0 +1,51 @@
+{
+  "name": "claude-inventory",
+  "version": "0.1.0",
+  "description": "Asset inventory and fleet management \u2014 machines, drives, devices, venues, networks",
+  "author": {
+    "name": "Shawn Whitney Anderson"
+  },
+  "license": "MIT",
+  "keywords": [
+    "inventory",
+    "fleet",
+    "devices",
+    "storage",
+    "network",
+    "backup",
+    "health"
+  ],
+  "skills": [
+    "./skills/"
+  ],
+  "commands": [
+    "./commands/"
+  ],
+  "agents": [
+    "./agents/quartermaster.md"
+  ],
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run ${CLAUDE_PLUGIN_ROOT}/hooks/fleet-pulse.py"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run ${CLAUDE_PLUGIN_ROOT}/hooks/koi-capture.py",
+            "timeout": 5
+          }
+        ],
+        "matcher": "Write|Edit"
+      }
+    ]
+  }
+}
