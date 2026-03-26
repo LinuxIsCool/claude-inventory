@@ -1,6 +1,8 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["psycopg2-binary"]
+# dependencies = [
+#     "legion-hooks @ file:///home/shawn/.claude/plugins/local/legion-plugins/packages/legion-hooks",
+# ]
 # ///
 """KOI capture hook for claude-inventory — pushes asset cards to KOI on write.
 
@@ -9,13 +11,9 @@ with YAML frontmatter (name, type, status, health, location) to the
 legion.claude-inventory namespace.
 """
 
-import sys
 from pathlib import Path
 
-# Add shared lib to path
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
-
-from koi_hook import (
+from legion_hooks.koi import (
     is_under_directory,
     read_hook_stdin,
     extract_file_path,
