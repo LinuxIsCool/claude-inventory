@@ -2,7 +2,6 @@
 description: "Create or update an inventory asset"
 argument-hint: "<name> [--type machine|drive|mobile|network|venue|service]"
 allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Skill]
-model: sonnet
 ---
 
 # /asset

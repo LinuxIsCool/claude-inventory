@@ -2,7 +2,6 @@
 description: "View and manage the asset inventory"
 argument-hint: "[scan | health | browse <query> | stats | consolidation]"
 allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Skill]
-model: sonnet
 ---
 
 # /inventory
