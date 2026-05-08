@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claude Inventory</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text x='50%' y='52' font-size='52' text-anchor='middle'>%F0%9F%93%A6</text></svg>">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            pixel: ['"Press Start 2P"', 'monospace'],
+            mono: ['JetBrains Mono', 'Fira Code', 'monospace'],
+          },
+          colors: {
+            surface: { DEFAULT: '#0f0f17', card: '#161622', border: '#2a2a3e', raised: '#1e1e30' },
+            accent: { green: '#a6e3a1', blue: '#89b4fa', red: '#f38ba8', yellow: '#f9e2af', purple: '#cba6f7', pink: '#f5c2e7', teal: '#94e2d5' },
+          },
+          animation: { 'fade-in': 'fade-in 0.2s ease-out' },
+          keyframes: {
+            'fade-in': {
+              from: { opacity: 0, transform: 'translateY(5px)' },
+              to: { opacity: 1, transform: 'translateY(0)' },
+            },
+          },
+        }
+      }
+    }
+  </script>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root { color-scheme: dark; }
+    *, *::before, *::after { box-sizing: border-box; }
+    body { background: #0f0f17; color: #cdd6f4; font-family: 'JetBrains Mono', monospace; }
+    ::-webkit-scrollbar { width: 7px; height: 7px; }
+    ::-webkit-scrollbar-track { background: #0f0f17; }
+    ::-webkit-scrollbar-thumb { background: #2a2a3e; border-radius: 4px; }
+    button, input, select, a { transition: all .15s ease; }
+
+    /* Tabs */
+    .nav-tab { border: 1px solid transparent; transition: all .15s ease; }
+    .nav-tab:hover { border-color: #89b4fa66; color: #89b4fa; transform: translateY(-1px); }
+    .nav-tab.active { border-color: #a6e3a166; color: #a6e3a1; background: #a6e3a111; }
+
+    /* Cards */
+    .ui-card { background: #161622; border: 1px solid #2a2a3e; border-radius: 0.75rem; padding: 1.25rem; }
+    .ui-card:hover { border-color: #89b4fa66; transform: translateY(-1px); transition: all .2s; }
+
+    /* Badges — border-only with tint, claude-youtube style */
+    .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 0.4rem;
+             font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; font-weight: 500;
+             border: 1px solid #2a2a3e; background: #0f0f17; color: #bac2de; letter-spacing: 0.02em; }
+    .badge-public      { border-color: #a6e3a155; color: #a6e3a1; background: #a6e3a111; }
+    .badge-private     { border-color: #bac2de44; color: #bac2de; background: #bac2de08; }
+    .badge-restricted  { border-color: #f9e2af55; color: #f9e2af; background: #f9e2af11; }
+    .badge-sui-generis { border-color: #f5c2e755; color: #f5c2e7; background: #f5c2e711; }
+    .badge-active      { border-color: #89b4fa55; color: #89b4fa; background: #89b4fa11; }
+    .badge-anchor      { border-color: #cba6f755; color: #cba6f7; background: #cba6f711; }
+    .badge-primary     { border-color: #f9e2af55; color: #f9e2af; background: #f9e2af11; }
+    .badge-masked      { border-color: #f38ba855; color: #f38ba8; background: #f38ba811; }
+    .badge-pending     { border-color: #bac2de33; color: #6c7086; background: #1e1e30; }
+
+    /* Tables */
+    .ui-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.85rem; }
+    .ui-table thead th { text-align: left; font-family: 'JetBrains Mono', monospace; font-weight: 600;
+                         color: #6c7086; text-transform: uppercase; letter-spacing: 0.07em;
+                         font-size: 0.65rem; padding: 0.7rem 0.85rem; background: #0f0f17;
+                         border-bottom: 1px solid #2a2a3e; }
+    .ui-table tbody td { padding: 0.7rem 0.85rem; border-bottom: 1px solid #1e1e30; color: #cdd6f4; }
+    .ui-table tbody tr { transition: background .15s; }
+    .ui-table tbody tr:hover { background: #1e1e30; }
+    .ui-table tbody tr.clickable { cursor: pointer; }
+    .ui-table tbody tr.clickable:hover { background: #1e1e30; transform: translateX(2px); }
+    td.mono { font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; color: #94a3b8; }
+    td.num { text-align: right; font-family: 'JetBrains Mono', monospace; }
+
+    /* Filter inputs */
+    .ui-filter input, .ui-filter select {
+      background: #0f0f17; border: 1px solid #2a2a3e; color: #cdd6f4;
+      border-radius: 0.5rem; padding: 0.45rem 0.65rem; font-family: 'JetBrains Mono', monospace;
+      font-size: 0.78rem; outline: none;
+    }
+    .ui-filter input:focus, .ui-filter select:focus { border-color: #89b4fa66; }
+    .ui-filter label { font-size: 0.65rem; color: #6c7086; text-transform: uppercase; letter-spacing: 0.07em; }
+
+    /* Bars (capacity) */
+    .bar { background: #0f0f17; border: 1px solid #2a2a3e; height: 6px; border-radius: 3px; overflow: hidden; min-width: 90px; }
+    .bar-fill { height: 100%; background: linear-gradient(90deg, #a6e3a1, #94e2d5); }
+    .bar-fill.warn { background: linear-gradient(90deg, #f9e2af, #fab387); }
+    .bar-fill.crit { background: linear-gradient(90deg, #f38ba8, #eba0ac); }
+
+    /* Detail overlay */
+    .detail-overlay { display: none; position: fixed; inset: 0; background: rgba(15,15,23,0.85);
+                      backdrop-filter: blur(4px); z-index: 100; align-items: flex-start;
+                      justify-content: center; padding: 3rem 1rem; overflow-y: auto; }
+    .detail-overlay.open { display: flex; animation: fade-in .15s ease-out; }
+    .detail-panel { background: #161622; border: 1px solid #2a2a3e; max-width: 850px; width: 100%;
+                    padding: 2rem; border-radius: 0.75rem; box-shadow: 0 20px 60px rgba(0,0,0,0.5); }
+    .detail-panel .close { float: right; cursor: pointer; color: #6c7086; font-size: 1.5rem;
+                            background: transparent; border: 0; padding: 0; }
+    .detail-panel .close:hover { color: #f38ba8; }
+    .kv { display: grid; grid-template-columns: 180px 1fr; gap: 0.55rem 1rem; font-size: 0.85rem;
+          font-family: 'JetBrains Mono', monospace; }
+    .kv .k { color: #6c7086; text-transform: uppercase; font-size: 0.7rem; letter-spacing: 0.05em; }
+
+    /* Empty state */
+    .empty { text-align: center; padding: 3rem 1rem; color: #6c7086; font-family: 'JetBrains Mono', monospace; }
+    .empty .hint { font-size: 0.78rem; margin-top: 0.5rem; color: #4a5568; }
+
+    /* Error banner */
+    .err { background: #f38ba811; color: #f38ba8; padding: 0.75rem 1rem; border-radius: 0.5rem;
+           border: 1px solid #f38ba855; margin-bottom: 1rem; font-family: 'JetBrains Mono', monospace;
+           font-size: 0.82rem; }
+
+    /* Pill (small inline tag) */
+    .pill { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 0.4rem;
+            font-family: 'JetBrains Mono', monospace; font-size: 0.7rem;
+            background: #1e1e30; color: #bac2de; border: 1px solid #2a2a3e; }
+
+    /* Headings */
+    h2.section { font-family: 'Press Start 2P', monospace; font-size: 0.95rem;
+                 color: #cba6f7; letter-spacing: 0.08em; margin: 0; }
+
+    a { color: #89b4fa; text-decoration: none; }
+    a:hover { color: #a6e3a1; text-decoration: underline; }
+
+    mark { background: #f9e2af33; color: #f9e2af; border-radius: 3px; padding: 0 2px; }
+
+    @keyframes fade-in {
+      from { opacity: 0; transform: translateY(5px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  </style>
+</head>
+<body class="min-h-screen overflow-x-hidden">
+
+  <header class="w-full max-w-[1700px] mx-auto px-6 pt-6 pb-4">
+    <div class="flex items-start justify-between gap-6 flex-wrap">
+      <div>
+        <h1 class="font-pixel text-accent-green text-lg tracking-wider">CLAUDE INVENTORY</h1>
+        <p class="font-mono text-sm text-gray-500 mt-2">Read-only browser · backlog 427 · v0.1</p>
+      </div>
+      <div class="flex items-center gap-3 flex-wrap">
+        <div class="rounded-lg border border-surface-border bg-surface-card px-3 py-2 min-w-40">
+          <div class="font-mono text-[10px] text-gray-600 uppercase tracking-wider">Corpus</div>
+          <div id="header-counts" class="font-mono text-xs text-accent-blue mt-1">Loading…</div>
+        </div>
+        <div class="rounded-lg border border-surface-border bg-surface-card px-3 py-2 min-w-28">
+          <div class="font-mono text-[10px] text-gray-600 uppercase tracking-wider">Mode</div>
+          <div class="font-mono text-xs text-accent-yellow mt-1">Read-only</div>
+        </div>
+        <div class="rounded-lg border border-surface-border bg-surface-card px-3 py-2 min-w-28">
+          <div class="font-mono text-[10px] text-gray-600 uppercase tracking-wider">Schema</div>
+          <div id="header-schema" class="font-mono text-xs text-accent-purple mt-1">v?</div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="w-full max-w-[1700px] mx-auto px-6 pb-8 grid grid-cols-1 xl:grid-cols-12 gap-5">
+
+    <!-- Sidebar nav -->
+    <aside class="xl:col-span-2 min-w-0">
+      <div class="sticky top-6 space-y-4">
+        <nav id="tabs" class="rounded-xl border border-surface-border bg-surface-card p-2 space-y-1.5">
+          <button data-tab="overview" class="nav-tab active w-full text-left rounded-lg px-3 py-2.5 font-mono text-xs">
+            <div class="flex items-center justify-between"><span>Overview</span><span class="pill" id="pill-overview">·</span></div>
+          </button>
+          <button data-tab="people" class="nav-tab w-full text-left rounded-lg px-3 py-2.5 font-mono text-xs">
+            <div class="flex items-center justify-between"><span>People</span><span class="pill" id="pill-people">·</span></div>
+          </button>
+          <button data-tab="organizations" class="nav-tab w-full text-left rounded-lg px-3 py-2.5 font-mono text-xs">
+            <div class="flex items-center justify-between"><span>Organizations</span><span class="pill" id="pill-orgs">·</span></div>
+          </button>
+          <button data-tab="ventures" class="nav-tab w-full text-left rounded-lg px-3 py-2.5 font-mono text-xs">
+            <div class="flex items-center justify-between"><span>Ventures</span><span class="pill" id="pill-ventures">·</span></div>
+          </button>
+          <button data-tab="hardware" class="nav-tab w-full text-left rounded-lg px-3 py-2.5 font-mono text-xs">
+            <div class="flex items-center justify-between"><span>Hardware</span><span class="pill" id="pill-hardware">·</span></div>
+          </button>
+          <button data-tab="links" class="nav-tab w-full text-left rounded-lg px-3 py-2.5 font-mono text-xs">
+            <div class="flex items-center justify-between"><span>Identity Links</span><span class="pill" id="pill-links">·</span></div>
+          </button>
+          <button data-tab="relationships" class="nav-tab w-full text-left rounded-lg px-3 py-2.5 font-mono text-xs">
+            <div class="flex items-center justify-between"><span>Relationships</span><span class="pill" id="pill-rels">·</span></div>
+          </button>
+        </nav>
+
+        <div class="rounded-xl border border-surface-border bg-surface-card p-3">
+          <div class="font-mono text-[10px] text-gray-600 uppercase tracking-wider mb-2">Search</div>
+          <input id="search-input" type="search" placeholder="Carol Anne, darren@…" class="w-full bg-surface text-xs">
+          <div id="search-meta" class="font-mono text-[10px] text-gray-500 mt-1.5"></div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main panel -->
+    <section class="xl:col-span-10 min-w-0 animate-fade-in">
+      <div id="err-host"></div>
+
+      <div id="panel-overview" class="panel">
+        <div class="mb-4 flex items-center justify-between">
+          <h2 class="section">OVERVIEW</h2>
+          <div id="overview-meta" class="font-mono text-[11px] text-gray-500">Loading…</div>
+        </div>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3" id="overview-cards"></div>
+        <div class="mt-6 ui-card">
+          <div class="font-pixel text-[10px] text-accent-purple tracking-wider mb-3">PRIVACY DISTRIBUTION</div>
+          <div id="overview-privacy"></div>
+        </div>
+        <div class="mt-4 ui-card">
+          <div class="font-pixel text-[10px] text-accent-purple tracking-wider mb-3">RECENT ADDITIONS</div>
+          <div id="overview-recent"></div>
+        </div>
+      </div>
+
+      <div id="panel-people" class="panel hidden">
+        <div class="mb-4 flex items-center justify-between flex-wrap gap-3">
+          <h2 class="section">PEOPLE</h2>
+          <div class="ui-filter flex items-center gap-2 flex-wrap">
+            <label>Org</label>
+            <select id="people-org-filter"><option value="">all</option></select>
+            <label>Class</label>
+            <select id="people-class-filter">
+              <option value="">all</option><option>household</option><option>family</option>
+              <option>venture-partner</option><option>collaborator</option>
+              <option>professional</option><option>public-figure</option>
+            </select>
+            <label>Privacy</label>
+            <select id="people-privacy-filter">
+              <option value="">all</option><option>public</option>
+              <option>private</option><option>restricted</option>
+            </select>
+            <input id="people-q" type="search" placeholder="search name or notes">
+          </div>
+        </div>
+        <div id="people-table-host" class="ui-card !p-0 overflow-hidden"></div>
+      </div>
+
+      <div id="panel-organizations" class="panel hidden">
+        <div class="mb-4 flex items-center justify-between flex-wrap gap-3">
+          <h2 class="section">ORGANIZATIONS</h2>
+          <div class="ui-filter flex items-center gap-2">
+            <label>Type</label>
+            <select id="org-type-filter">
+              <option value="">all</option><option>company</option><option>nonprofit</option>
+              <option>foundation</option><option>institute</option><option>government</option>
+              <option>community-org</option><option>collective</option><option>dao</option>
+            </select>
+          </div>
+        </div>
+        <div id="orgs-table-host" class="ui-card !p-0 overflow-hidden"></div>
+      </div>
+
+      <div id="panel-ventures" class="panel hidden">
+        <div class="mb-4 flex items-center justify-between flex-wrap gap-3">
+          <h2 class="section">VENTURES</h2>
+          <div class="ui-filter flex items-center gap-2">
+            <label>Stage</label>
+            <select id="venture-stage-filter">
+              <option value="all">all</option><option value="seed">seed</option>
+              <option value="exploring">exploring</option><option value="active" selected>active</option>
+              <option value="sustaining">sustaining</option><option value="harvesting">harvesting</option>
+              <option value="dormant">dormant</option>
+            </select>
+          </div>
+        </div>
+        <div id="ventures-table-host" class="ui-card !p-0 overflow-hidden"></div>
+      </div>
+
+      <div id="panel-hardware" class="panel hidden">
+        <div class="mb-4 flex items-center justify-between flex-wrap gap-3">
+          <h2 class="section">HARDWARE</h2>
+          <div class="ui-filter flex items-center gap-2">
+            <label>Type</label>
+            <select id="hw-type-filter">
+              <option value="">all</option><option>drive</option><option>machine</option>
+              <option>mobile</option><option>network</option><option>venue</option><option>peripheral</option>
+            </select>
+          </div>
+        </div>
+        <div id="hardware-host" class="space-y-4"></div>
+      </div>
+
+      <div id="panel-links" class="panel hidden">
+        <div class="mb-4 flex items-center justify-between flex-wrap gap-3">
+          <h2 class="section">IDENTITY LINKS</h2>
+          <div class="ui-filter flex items-center gap-2 flex-wrap">
+            <label>Protocol</label>
+            <select id="link-protocol-filter"><option value="">all</option></select>
+            <label>Privacy</label>
+            <select id="link-privacy-filter">
+              <option value="">all</option><option>public</option>
+              <option>private</option><option>restricted</option>
+            </select>
+            <input id="link-q" type="search" placeholder="search identifier">
+          </div>
+        </div>
+        <div id="links-table-host" class="ui-card !p-0 overflow-hidden"></div>
+      </div>
+
+      <div id="panel-relationships" class="panel hidden">
+        <div class="mb-4 flex items-center justify-between flex-wrap gap-3">
+          <h2 class="section">RELATIONSHIPS</h2>
+          <div class="ui-filter flex items-center gap-2">
+            <label>Person</label>
+            <select id="rel-person-filter"><option value="">all</option></select>
+          </div>
+        </div>
+        <div id="rels-table-host" class="ui-card !p-0 overflow-hidden"></div>
+      </div>
+
+    </section>
+  </main>
+
+  <div class="detail-overlay" id="detail-overlay">
+    <div class="detail-panel" id="detail-panel">
+      <button class="close" id="detail-close" aria-label="close">×</button>
+      <div id="detail-content"></div>
+    </div>
+  </div>
+
+  <footer class="text-center py-6 font-mono text-[11px] text-gray-600">
+    backlog-427 · v0.1.0 · read-only ·
+    <a href="/healthz" target="_blank">healthz</a> ·
+    <a href="/api/overview" target="_blank">api</a>
+  </footer>
+
+  <script src="/vendor/app.js?v=2"></script>
+</body>
+</html>
