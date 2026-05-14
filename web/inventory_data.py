@@ -7,6 +7,7 @@ that even buggy code paths cannot mutate.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 from typing import Any, Iterable
@@ -14,6 +15,68 @@ from typing import Any, Iterable
 DEFAULT_DB_PATH = Path.home() / ".claude" / "local" / "inventory" / "db" / "inventory.db"
 SUI_GENERIS = "indigenous-sui-generis"
 RESTRICTED = "restricted"
+
+
+# ──────────────────────────── live drive scan ────────────────────────────
+# Read-only probes of the running kernel state. No external commands; pure
+# /dev + /proc + statvfs. Used to enrich drive rows with a `connected`
+# status (attached + mounted + accessible) and fresh capacity values.
+
+
+def _live_attached_uuids() -> set[str]:
+    """Lowercase set of FS-UUIDs currently visible under /dev/disk/by-uuid/."""
+    by_uuid = Path("/dev/disk/by-uuid")
+    if not by_uuid.is_dir():
+        return set()
+    try:
+        return {p.name.lower() for p in by_uuid.iterdir()}
+    except OSError:
+        return set()
+
+
+def _live_mounts_by_uuid() -> dict[str, str]:
+    """Map FS-UUID → live mount point. Built from /dev/disk/by-uuid + /proc/mounts."""
+    by_uuid_dir = Path("/dev/disk/by-uuid")
+    if not by_uuid_dir.is_dir():
+        return {}
+    # Resolve every UUID symlink to its real /dev/sdXY path
+    dev_to_uuid: dict[str, str] = {}
+    for link in by_uuid_dir.iterdir():
+        try:
+            dev_to_uuid[link.resolve().as_posix()] = link.name.lower()
+        except OSError:
+            continue
+    out: dict[str, str] = {}
+    try:
+        with open("/proc/mounts", encoding="utf-8") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) < 2:
+                    continue
+                # /proc/mounts encodes spaces as \040 etc.
+                dev = parts[0]
+                mp = parts[1].replace("\\040", " ").replace("\\011", "\t")
+                uuid = dev_to_uuid.get(dev)
+                if uuid:
+                    out[uuid] = mp
+    except OSError:
+        pass
+    return out
+
+
+def _statvfs_safe(mount_point: str) -> dict[str, int] | None:
+    """Return total/used/free bytes for mount_point, or None on any error."""
+    try:
+        s = os.statvfs(mount_point)
+    except OSError:
+        return None
+    if s.f_frsize <= 0 or s.f_blocks <= 0:
+        return None
+    total = s.f_blocks * s.f_frsize
+    free = s.f_bavail * s.f_frsize
+    # f_bfree counts ALL free incl. root-reserved; f_bavail is what the user can use.
+    used = total - (s.f_bfree * s.f_frsize)
+    return {"total_bytes": total, "used_bytes": used, "free_bytes": free}
 
 # ──────────────────────────── connection ────────────────────────────
 
@@ -338,16 +401,48 @@ def ventures_list(
 # ──────────────────────────── hardware ────────────────────────────
 
 
+# Internality classification (drives only). External = USB/SD/portable form-factor.
+_EXTERNAL_INTERFACES = ("usb",)  # match prefix
+_EXTERNAL_FORM_FACTORS = {"usb-stick", "sd", "microsd", "external-2.5", "external-3.5", "external"}
+
+
+def _classify_internality(interface: str | None, form_factor: str | None) -> str:
+    iface = (interface or "").lower()
+    ff = (form_factor or "").lower()
+    if any(iface.startswith(p) for p in _EXTERNAL_INTERFACES):
+        return "external"
+    if ff in _EXTERNAL_FORM_FACTORS:
+        return "external"
+    if iface or ff:
+        return "internal"
+    return "unknown"
+
+
 def hardware_list(
     conn: sqlite3.Connection,
     asset_type: str | None = None,
+    q: str | None = None,
+    status: str | None = None,
+    location: str | None = None,
+    internality: str | None = None,
     limit: int = 500,
 ) -> list[dict]:
-    """Return hardware assets (drives, machines, mobiles) as a flat list with type."""
+    """Return hardware assets (drives, machines, mobiles) as a flat list with type.
+
+    For drives, enriches each row with:
+      - `capacity`: dict of size/used/free/pct from the most recent observations,
+        overridden by live statvfs values when the drive is currently mounted.
+      - `connected`: bool — attached + mounted + statvfs accessible right now.
+      - `live_status`: "connected" when connected=True, else None. Frontend uses
+        this to override the DB lifecycle badge when live state confirms.
+      - `mount_point`: live mount point from /proc/mounts (when connected) or
+        DB-recorded value otherwise.
+      - `mount_uuid`: filesystem UUID from drives table (used for live matching).
+    """
     sql = """
         SELECT
             a.asset_id, a.asset_type, a.name, a.manufacturer, a.model,
-            a.status, a.location, a.last_seen, a.created_at
+            a.status, a.location, a.last_seen, a.created_at, a.notes
         FROM assets a
         WHERE a.asset_type IN ('drive','machine','mobile','network','venue','peripheral')
     """
@@ -355,37 +450,228 @@ def hardware_list(
     if asset_type:
         sql += " AND a.asset_type = ?"
         params.append(asset_type)
+    if status and status != "connected":
+        # 'connected' is a live-derived status — handled post-fetch below
+        sql += " AND a.status = ?"
+        params.append(status)
+    if location:
+        sql += " AND a.location = ?"
+        params.append(location)
+    if q:
+        sql += " AND (a.name LIKE ? OR COALESCE(a.manufacturer,'') LIKE ? OR COALESCE(a.model,'') LIKE ? OR COALESCE(a.notes,'') LIKE ?)"
+        like = f"%{q}%"
+        params.extend([like, like, like, like])
     sql += " ORDER BY a.asset_type, a.name LIMIT ?"
     params.append(limit)
     rows = query(conn, sql, tuple(params))
 
-    # Enrich drives with capacity (from observations if present)
     drive_ids = [r["asset_id"] for r in rows if r["asset_type"] == "drive"]
-    if drive_ids:
-        placeholders = ",".join("?" * len(drive_ids))
-        cap_rows = query(
-            conn,
-            f"""
-            SELECT asset_id, metric, value_num, value_text, ts
-            FROM observations
-            WHERE asset_id IN ({placeholders})
-              AND metric IN ('size_bytes','used_bytes','free_bytes','capacity_pct','total_bytes')
-            ORDER BY ts DESC
-            """,
-            tuple(drive_ids),
-        )
-        # Keep only newest per (asset_id, metric)
-        cap_by_drive: dict[str, dict] = {}
-        for cr in cap_rows:
-            key = cr["asset_id"]
-            cap_by_drive.setdefault(key, {})
-            metric = cr["metric"]
-            if metric not in cap_by_drive[key]:
-                cap_by_drive[key][metric] = cr["value_num"] or cr["value_text"]
-        for r in rows:
-            if r["asset_type"] == "drive":
-                r["capacity"] = cap_by_drive.get(r["asset_id"], {})
+    if not drive_ids:
+        return rows
+
+    placeholders = ",".join("?" * len(drive_ids))
+
+    # 1) Latest observations per (asset_id, metric)
+    cap_rows = query(
+        conn,
+        f"""
+        SELECT asset_id, metric, value_num, value_text, ts
+        FROM observations
+        WHERE asset_id IN ({placeholders})
+          AND metric IN ('size_bytes','used_bytes','free_bytes','capacity_pct','total_bytes')
+        ORDER BY ts DESC
+        """,
+        tuple(drive_ids),
+    )
+    cap_by_drive: dict[str, dict] = {}
+    for cr in cap_rows:
+        key = cr["asset_id"]
+        cap_by_drive.setdefault(key, {})
+        metric = cr["metric"]
+        if metric not in cap_by_drive[key]:
+            cap_by_drive[key][metric] = cr["value_num"] or cr["value_text"]
+
+    # 2) drives table — for mount_uuid, interface, form_factor, DB-recorded capacity
+    drive_rows = query(
+        conn,
+        f"""
+        SELECT asset_id, mount_uuid, mount_point, drive_state,
+               capacity_bytes, used_bytes, free_bytes, filesystem,
+               interface, form_factor, backup_status, backup_target,
+               usage_class, encryption, smart_health
+        FROM drives
+        WHERE asset_id IN ({placeholders})
+        """,
+        tuple(drive_ids),
+    )
+    drives_by_id: dict[str, dict] = {d["asset_id"]: d for d in drive_rows}
+
+    # 3) Live kernel state — run once per request, reused across rows
+    attached_uuids = _live_attached_uuids()
+    live_mounts = _live_mounts_by_uuid()
+
+    # 4) Enrich each drive row
+    for r in rows:
+        if r["asset_type"] != "drive":
+            continue
+        drive = drives_by_id.get(r["asset_id"], {})
+        mount_uuid = (drive.get("mount_uuid") or "").lower() or None
+        db_mount_point = drive.get("mount_point")
+        db_caps = {
+            "capacity_bytes": drive.get("capacity_bytes"),
+            "used_bytes": drive.get("used_bytes"),
+            "free_bytes": drive.get("free_bytes"),
+        }
+
+        attached = bool(mount_uuid and mount_uuid in attached_uuids)
+        live_mp = live_mounts.get(mount_uuid) if mount_uuid else None
+        live_caps = _statvfs_safe(live_mp) if live_mp else None
+        connected = bool(attached and live_mp and live_caps)
+
+        # Build the capacity payload: live values win when available.
+        cap = dict(cap_by_drive.get(r["asset_id"], {}))
+        # Backfill from drives table if observations didn't have them
+        if db_caps["capacity_bytes"] and not cap.get("total_bytes") and not cap.get("size_bytes"):
+            cap["total_bytes"] = db_caps["capacity_bytes"]
+        if db_caps["used_bytes"] and not cap.get("used_bytes"):
+            cap["used_bytes"] = db_caps["used_bytes"]
+        if db_caps["free_bytes"] and not cap.get("free_bytes"):
+            cap["free_bytes"] = db_caps["free_bytes"]
+        # Live override
+        if live_caps:
+            cap["total_bytes"] = live_caps["total_bytes"]
+            cap["used_bytes"] = live_caps["used_bytes"]
+            cap["free_bytes"] = live_caps["free_bytes"]
+            cap["live"] = True
+        else:
+            cap["live"] = False
+
+        # Compute pct if total known
+        total = cap.get("total_bytes") or cap.get("size_bytes")
+        used = cap.get("used_bytes")
+        if total and used is not None:
+            try:
+                cap["capacity_pct"] = round(int(used) / int(total) * 100, 1)
+            except (TypeError, ValueError, ZeroDivisionError):
+                pass
+
+        r["capacity"] = cap
+        r["connected"] = connected
+        r["attached"] = attached
+        r["live_status"] = "connected" if connected else None
+        r["mount_point"] = live_mp or db_mount_point
+        r["mount_uuid"] = mount_uuid
+        r["filesystem"] = drive.get("filesystem")
+        r["interface"] = drive.get("interface")
+        r["form_factor"] = drive.get("form_factor")
+        r["internality"] = _classify_internality(drive.get("interface"), drive.get("form_factor"))
+        r["backup_status"] = drive.get("backup_status")
+        r["backup_target"] = drive.get("backup_target")
+        r["usage_class"] = drive.get("usage_class")
+        r["encryption"] = drive.get("encryption")
+        r["smart_health"] = drive.get("smart_health")
+
+    # Post-fetch filters that depend on enriched fields
+    if status == "connected":
+        rows = [r for r in rows if r.get("connected")]
+    if internality:
+        rows = [r for r in rows if r.get("asset_type") != "drive" or r.get("internality") == internality]
+
     return rows
+
+
+def hardware_facets(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Distinct filter values + counts for the Hardware page toolbar.
+
+    Returns:
+      types       — asset_type counts
+      statuses    — a.status counts (includes 'connected' synthetic value at top)
+      locations   — a.location counts
+      internalities — derived from drives.interface + drives.form_factor
+    """
+    types = {row["asset_type"]: row["n"] for row in query(
+        conn,
+        """
+        SELECT asset_type, COUNT(*) AS n FROM assets
+        WHERE asset_type IN ('drive','machine','mobile','network','venue','peripheral')
+        GROUP BY asset_type ORDER BY asset_type
+        """,
+    )}
+    statuses = {row["status"] or "(none)": row["n"] for row in query(
+        conn,
+        """
+        SELECT status, COUNT(*) AS n FROM assets
+        WHERE asset_type IN ('drive','machine','mobile','network','venue','peripheral')
+        GROUP BY status ORDER BY n DESC
+        """,
+    )}
+    locations = {row["location"] or "(none)": row["n"] for row in query(
+        conn,
+        """
+        SELECT location, COUNT(*) AS n FROM assets
+        WHERE asset_type IN ('drive','machine','mobile','network','venue','peripheral')
+        GROUP BY location ORDER BY n DESC
+        """,
+    )}
+    # Internality is derived per-drive; compute live
+    drive_rows = query(conn, "SELECT interface, form_factor FROM drives")
+    internalities: dict[str, int] = {"internal": 0, "external": 0, "unknown": 0}
+    for d in drive_rows:
+        cls = _classify_internality(d.get("interface"), d.get("form_factor"))
+        internalities[cls] = internalities.get(cls, 0) + 1
+
+    # Connected count (live)
+    attached = _live_attached_uuids()
+    mounts = _live_mounts_by_uuid()
+    connected_uuids = {u for u, mp in mounts.items() if u in attached and _statvfs_safe(mp)}
+    # match by mount_uuid in drives table
+    db_uuids = [row["mount_uuid"].lower() for row in query(
+        conn, "SELECT mount_uuid FROM drives WHERE mount_uuid IS NOT NULL AND mount_uuid != ''"
+    ) if row["mount_uuid"]]
+    connected_count = sum(1 for u in db_uuids if u in connected_uuids)
+
+    return {
+        "types": types,
+        "statuses": statuses,
+        "locations": locations,
+        "internalities": internalities,
+        "connected_count": connected_count,
+    }
+
+
+def hardware_detail(conn: sqlite3.Connection, asset_id: str) -> dict | None:
+    """Single-asset detail for the drawer sidecar."""
+    asset = query_one(
+        conn,
+        """
+        SELECT a.*
+        FROM assets a
+        WHERE a.asset_id = ?
+        """,
+        (asset_id,),
+    )
+    if not asset:
+        return None
+    # Reuse hardware_list with a tight filter to inherit all enrichment
+    rows = hardware_list(conn, asset_type=asset["asset_type"], limit=500)
+    enriched = next((r for r in rows if r["asset_id"] == asset_id), None)
+    if not enriched:
+        return None
+    # Pull observation history (last 20) for sparkline-ready data
+    obs = query(
+        conn,
+        """
+        SELECT metric, value_num, value_text, ts
+        FROM observations
+        WHERE asset_id = ?
+        ORDER BY ts DESC
+        LIMIT 20
+        """,
+        (asset_id,),
+    )
+    enriched["observations"] = obs
+    enriched["notes"] = asset.get("notes")
+    return enriched
 
 
 # ──────────────────────────── identity links ────────────────────────────

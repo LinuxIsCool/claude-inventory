@@ -86,10 +86,42 @@ $('#tabs').addEventListener('click', e => {
   if (btn) showTab(btn.dataset.tab);
 });
 
+// ──────────────────────────── header (global, tab-independent) ────────────────────────────
+// Cached overview payload so we fetch it once on boot for the header,
+// then reuse for the Overview tab if/when it's clicked.
+let _overviewCache = null;
+
+async function loadHeader() {
+  if (_overviewCache) return _overviewCache;
+  let data;
+  try {
+    data = await api('/api/overview');
+  } catch (e) {
+    $('#header-counts').textContent = 'overview unavailable';
+    $('#header-schema').textContent = 'v?';
+    throw e;
+  }
+  _overviewCache = data;
+  const c = data.counts || {};
+  const hwTotal = (c.drive||0)+(c.machine||0)+(c.mobile||0)+(c.network||0)+(c.venue||0)+(c.peripheral||0);
+  // Header
+  $('#header-counts').textContent = `${c.TOTAL||0} assets · ${c.identity_links||0} links`;
+  $('#header-schema').textContent = `v${data.schema_version}`;
+  // Sidebar pills — also tab-independent
+  $('#pill-overview').textContent = c.TOTAL || 0;
+  $('#pill-people').textContent = c.person || 0;
+  $('#pill-orgs').textContent = c.organization || 0;
+  $('#pill-ventures').textContent = c.venture || 0;
+  $('#pill-hardware').textContent = hwTotal;
+  $('#pill-links').textContent = c.identity_links || 0;
+  $('#pill-rels').textContent = c.relationships || 0;
+  return data;
+}
+
 // ──────────────────────────── overview ────────────────────────────
 
 async function loadOverview() {
-  const data = await api('/api/overview');
+  const data = await loadHeader();
   const c = data.counts || {};
   const hwTotal = (c.drive||0)+(c.machine||0)+(c.mobile||0)+(c.network||0)+(c.venue||0)+(c.peripheral||0);
   const cards = [
@@ -112,18 +144,8 @@ async function loadOverview() {
   $('#overview-meta').textContent =
     `${c.TOTAL || 0} assets · ${c.identity_links || 0} links · ${c.relationships || 0} edges · schema v${data.schema_version}`;
 
-  // Header
-  $('#header-counts').textContent = `${c.TOTAL||0} assets · ${c.identity_links||0} links`;
-  $('#header-schema').textContent = `v${data.schema_version}`;
-
-  // Sidebar pills
-  $('#pill-overview').textContent = c.TOTAL || 0;
-  $('#pill-people').textContent = c.person || 0;
-  $('#pill-orgs').textContent = c.organization || 0;
-  $('#pill-ventures').textContent = c.venture || 0;
-  $('#pill-hardware').textContent = hwTotal;
-  $('#pill-links').textContent = c.identity_links || 0;
-  $('#pill-rels').textContent = c.relationships || 0;
+  // Header + sidebar pills are now populated by loadHeader() (called above).
+  // Keep this block intentionally empty — see loadHeader().
 
   // Privacy distribution
   const pb = data.privacy_breakdown || {};
@@ -378,13 +400,13 @@ async function loadHardware() {
         ${type === 'drive' ? '<th>Capacity</th>' : ''}
         <th>Last seen</th>
       </tr></thead><tbody>
-        ${rows.map(h => `<tr>
+        ${rows.map(h => `<tr class="clickable ${h.asset_id === _hwSelectedAssetId ? 'selected' : ''}" data-asset-id="${escapeHtml(h.asset_id)}">
           <td><div class="font-mono text-xs">${escapeHtml(h.name)}</div></td>
           <td class="text-gray-400">${escapeHtml(h.manufacturer || '')}</td>
           <td class="text-gray-400">${escapeHtml(h.model || '')}</td>
-          <td>${renderStatusBadge(h.status)}</td>
+          <td>${renderStatusBadge(h.live_status || h.status)}</td>
           <td class="text-gray-400">${escapeHtml(h.location || '')}</td>
-          ${type === 'drive' ? `<td>${renderDriveCapacity(h.capacity)}</td>` : ''}
+          ${type === 'drive' ? `<td>${renderDriveCapacity(h.capacity, h.connected)}</td>` : ''}
           <td class="mono">${escapeHtml(h.last_seen || '')}</td>
         </tr>`).join('')}
       </tbody></table>
@@ -394,25 +416,168 @@ async function loadHardware() {
 }
 function renderStatusBadge(status) {
   if (!status) return '<span class="badge badge-pending">pending</span>';
-  const cls = status === 'active' ? 'active' : status === 'retired' || status === 'wiped' ? 'masked' : 'pending';
+  let cls;
+  if (status === 'connected')                        cls = 'connected';
+  else if (status === 'active')                      cls = 'active';
+  else if (status === 'retired' || status === 'wiped') cls = 'masked';
+  else                                               cls = 'pending';
   return `<span class="badge badge-${cls}">${escapeHtml(status)}</span>`;
 }
-function renderDriveCapacity(c) {
+function renderDriveCapacity(c, connected) {
   if (!c) return '';
-  const total = Number(c.size_bytes || c.total_bytes || 0);
-  const used = Number(c.used_bytes || 0);
+  const total = Number(c.total_bytes || c.size_bytes || 0);
+  const used  = Number(c.used_bytes || 0);
+  // free comes from live statvfs when connected; else fall back to total-used
+  const free  = c.free_bytes != null ? Number(c.free_bytes)
+              : total ? Math.max(0, total - used) : 0;
   const pctRaw = c.capacity_pct;
   const pct = pctRaw != null ? Number(pctRaw)
              : total ? Math.round(used/total*100) : 0;
-  const cls = pct >= 90 ? 'crit' : pct >= 75 ? 'warn' : '';
+  // Bar colour reflects pressure (used%). High used = warn/crit.
+  let cls = pct >= 90 ? 'crit' : pct >= 75 ? 'warn' : '';
+  // Live-data tag pulses the bar to signal "this is real-time"
+  if (c.live) cls += ' live';
+  // Display value = REMAINING space (the unfilled portion of the bar).
+  const remaining = total ? fmtBytes(free) : '—';
   return `
     <div class="flex items-center gap-2">
-      <div class="bar"><div class="bar-fill ${escapeHtml(cls)}" style="width:${escapeHtml(String(pct))}%"></div></div>
-      <span class="font-mono text-[10px] text-gray-500">${escapeHtml(String(pct))}%</span>
+      <div class="bar" title="${escapeHtml(String(pct))}% used"><div class="bar-fill ${escapeHtml(cls.trim())}" style="width:${escapeHtml(String(pct))}%"></div></div>
+      <span class="font-mono text-[10px] ${connected ? 'text-accent-teal' : 'text-gray-500'}">${escapeHtml(remaining)}${total ? ' free' : ''}</span>
     </div>
-    ${total ? `<div class="font-mono text-[10px] text-gray-500 mt-0.5">${escapeHtml(fmtBytes(used))} / ${escapeHtml(fmtBytes(total))}</div>` : ''}`;
+    ${total ? `<div class="font-mono text-[10px] text-gray-500 mt-0.5">${escapeHtml(fmtBytes(used))} used / ${escapeHtml(fmtBytes(total))}</div>` : ''}`;
 }
 $('#hw-type-filter').addEventListener('change', () => loadHardware());
+$('#hw-internality-filter').addEventListener('change', () => loadHardware());
+$('#hw-status-filter').addEventListener('change', () => loadHardware());
+$('#hw-location-filter').addEventListener('change', () => loadHardware());
+$('#hw-q').addEventListener('input', debounce(() => loadHardware(), 250));
+$('#hw-reset').addEventListener('click', () => {
+  $('#hw-type-filter').value = '';
+  $('#hw-internality-filter').value = '';
+  $('#hw-status-filter').value = '';
+  $('#hw-location-filter').value = '';
+  $('#hw-q').value = '';
+  loadHardware();
+});
+// Row click → open drawer with detail
+$('#hardware-host').addEventListener('click', e => {
+  const tr = e.target.closest('tr.clickable');
+  if (!tr) return;
+  const id = tr.dataset.assetId;
+  if (id) showHardwareDetail(id);
+});
+$('#hw-drawer-close').addEventListener('click', () => {
+  $('#hw-drawer').classList.remove('open');
+  _hwSelectedAssetId = null;
+  // re-render to drop the selected-row highlight (cheap: drop highlight w/o refetch)
+  $$('#hardware-host tr.clickable.selected').forEach(r => r.classList.remove('selected'));
+});
+// Esc closes drawer
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && $('#hw-drawer').classList.contains('open')) {
+    $('#hw-drawer-close').click();
+  }
+});
+
+async function showHardwareDetail(assetId) {
+  _hwSelectedAssetId = assetId;
+  // Highlight clicked row
+  $$('#hardware-host tr.clickable').forEach(r => {
+    r.classList.toggle('selected', r.dataset.assetId === assetId);
+  });
+  $('#hw-drawer').classList.add('open');
+  setHtml($('#hw-drawer-content'), `<div class="empty" style="padding: 1rem">Loading…</div>`);
+  let d;
+  try {
+    d = await api('/api/hardware/' + encodeURIComponent(assetId));
+  } catch (e) {
+    setHtml($('#hw-drawer-content'), `<div class="err">Failed to load: ${escapeHtml(e.message)}</div>`);
+    return;
+  }
+  setHtml($('#hw-drawer-content'), renderHardwareDetail(d));
+}
+
+function _kv(label, value, mono = false) {
+  if (value == null || value === '') return '';
+  return `<div class="k">${escapeHtml(label)}</div><div class="${mono ? 'mono' : ''}">${escapeHtml(String(value))}</div>`;
+}
+
+function renderHardwareDetail(d) {
+  const cap = d.capacity || {};
+  const total = Number(cap.total_bytes || cap.size_bytes || 0);
+  const used  = Number(cap.used_bytes || 0);
+  const free  = cap.free_bytes != null ? Number(cap.free_bytes) : (total ? Math.max(0, total - used) : 0);
+  const pct   = cap.capacity_pct != null ? Number(cap.capacity_pct) : (total ? Math.round(used/total*100) : 0);
+  const isDrive = d.asset_type === 'drive';
+  return `
+    <div class="mb-3">
+      <div class="font-pixel text-[11px] text-accent-purple tracking-wider mb-1">${escapeHtml((d.asset_type || '').toUpperCase())}</div>
+      <div class="font-mono text-sm text-white">${escapeHtml(d.name || '(unnamed)')}</div>
+      <div class="mt-2 flex gap-2 flex-wrap">
+        ${renderStatusBadge(d.live_status || d.status)}
+        ${d.connected ? '<span class="badge badge-connected">live</span>' : ''}
+        ${d.attached && !d.connected ? '<span class="badge badge-restricted">attached</span>' : ''}
+        ${isDrive && d.internality ? `<span class="badge badge-pending">${escapeHtml(d.internality)}</span>` : ''}
+      </div>
+    </div>
+    ${isDrive && total ? `
+      <div class="ui-card !p-3 mb-3">
+        <div class="font-pixel text-[9px] text-accent-purple tracking-wider mb-2">CAPACITY</div>
+        <div class="flex items-center gap-2 mb-2">
+          <div class="bar flex-1"><div class="bar-fill ${pct >= 90 ? 'crit' : pct >= 75 ? 'warn' : ''} ${cap.live ? 'live' : ''}" style="width:${escapeHtml(String(pct))}%"></div></div>
+          <span class="font-mono text-xs text-accent-teal">${escapeHtml(fmtBytes(free))} free</span>
+        </div>
+        <div class="font-mono text-[11px] text-gray-400">
+          ${escapeHtml(fmtBytes(used))} used / ${escapeHtml(fmtBytes(total))} total · ${escapeHtml(String(pct))}%
+          ${cap.live ? ' · <span class="text-accent-teal">live</span>' : ''}
+        </div>
+      </div>` : ''}
+    <div class="ui-card !p-3 mb-3">
+      <div class="font-pixel text-[9px] text-accent-purple tracking-wider mb-2">METADATA</div>
+      <div class="kv">
+        ${_kv('asset_id', d.asset_id, true)}
+        ${_kv('manufacturer', d.manufacturer)}
+        ${_kv('model', d.model)}
+        ${_kv('location', d.location)}
+        ${_kv('last_seen', d.last_seen, true)}
+        ${_kv('created_at', d.created_at, true)}
+      </div>
+    </div>
+    ${isDrive ? `
+      <div class="ui-card !p-3 mb-3">
+        <div class="font-pixel text-[9px] text-accent-purple tracking-wider mb-2">DRIVE</div>
+        <div class="kv">
+          ${_kv('interface', d.interface)}
+          ${_kv('form_factor', d.form_factor)}
+          ${_kv('filesystem', d.filesystem)}
+          ${_kv('mount_point', d.mount_point, true)}
+          ${_kv('mount_uuid', d.mount_uuid, true)}
+          ${_kv('usage_class', d.usage_class)}
+          ${_kv('encryption', d.encryption)}
+          ${_kv('smart_health', d.smart_health)}
+          ${_kv('backup_status', d.backup_status)}
+          ${_kv('backup_target', d.backup_target, true)}
+        </div>
+      </div>` : ''}
+    ${d.notes ? `
+      <div class="ui-card !p-3 mb-3">
+        <div class="font-pixel text-[9px] text-accent-purple tracking-wider mb-2">NOTES</div>
+        <div class="font-mono text-xs text-gray-300 whitespace-pre-wrap">${escapeHtml(d.notes)}</div>
+      </div>` : ''}
+    ${(d.observations && d.observations.length) ? `
+      <div class="ui-card !p-3">
+        <div class="font-pixel text-[9px] text-accent-purple tracking-wider mb-2">RECENT OBSERVATIONS (${d.observations.length})</div>
+        <div class="font-mono text-[11px] space-y-1">
+          ${d.observations.slice(0, 10).map(o => `
+            <div class="flex justify-between gap-2">
+              <span class="text-gray-500">${escapeHtml(o.ts || '')}</span>
+              <span class="text-gray-300">${escapeHtml(o.metric)}</span>
+              <span class="text-gray-400 text-right">${escapeHtml(String(o.value_num != null ? o.value_num : (o.value_text || '')))}</span>
+            </div>`).join('')}
+        </div>
+      </div>` : ''}
+  `;
+}
 
 // ──────────────────────────── identity links ────────────────────────────
 
@@ -528,6 +693,8 @@ $('#search-input').addEventListener('keydown', e => {
 // ──────────────────────────── boot ────────────────────────────
 
 function boot() {
+  // Header + sidebar pills load regardless of initial tab — they're global.
+  loadHeader().catch(err => console.error('loadHeader failed:', err));
   const initialTab = (window.location.hash || '#overview').slice(1);
   const valid = ['overview','people','organizations','ventures','hardware','links','relationships'];
   showTab(valid.includes(initialTab) ? initialTab : 'overview');

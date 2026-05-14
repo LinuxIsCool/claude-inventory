@@ -133,6 +133,11 @@ class InventoryHandler(BaseHTTPRequestHandler):
             return self._serve_ventures(params)
         if path == "/api/hardware":
             return self._serve_hardware(params)
+        if path == "/api/hardware/facets":
+            return self._serve_hardware_facets()
+        if path.startswith("/api/hardware/"):
+            asset_id = path[len("/api/hardware/"):].strip("/")
+            return self._serve_hardware_detail(asset_id)
         if path == "/api/identity-links":
             return self._serve_identity_links(params, is_local)
         if path == "/api/identity-protocols":
@@ -234,13 +239,61 @@ class InventoryHandler(BaseHTTPRequestHandler):
             rows = iv.hardware_list(
                 conn,
                 asset_type=_opt_str(params, "type"),
+                q=_opt_str(params, "q"),
+                status=_opt_str(params, "status"),
+                location=_opt_str(params, "location"),
+                internality=_opt_str(params, "internality"),
                 limit=_int_arg(params, "limit", 500),
             )
         # Group by asset_type for tab convenience
         grouped: dict[str, list[dict]] = {}
         for r in rows:
             grouped.setdefault(r["asset_type"], []).append(r)
-        self._send_json({"hardware": rows, "grouped": grouped, "total": len(rows)})
+        # Summary stats — count + total/free capacity across filtered drives
+        total_bytes = 0
+        free_bytes = 0
+        used_bytes = 0
+        connected = 0
+        drive_count = 0
+        for r in rows:
+            if r.get("asset_type") != "drive":
+                continue
+            drive_count += 1
+            if r.get("connected"):
+                connected += 1
+            cap = r.get("capacity") or {}
+            t = cap.get("total_bytes") or cap.get("size_bytes") or 0
+            u = cap.get("used_bytes") or 0
+            f = cap.get("free_bytes") or 0
+            try:
+                total_bytes += int(t)
+                used_bytes += int(u)
+                free_bytes += int(f)
+            except (TypeError, ValueError):
+                pass
+        summary = {
+            "count": len(rows),
+            "drive_count": drive_count,
+            "connected_count": connected,
+            "total_bytes": total_bytes,
+            "used_bytes": used_bytes,
+            "free_bytes": free_bytes,
+        }
+        self._send_json({"hardware": rows, "grouped": grouped, "total": len(rows), "summary": summary})
+
+    def _serve_hardware_facets(self) -> None:
+        with contextlib.closing(iv.get_db(SERVER_DB_PATH)) as conn:
+            data = iv.hardware_facets(conn)
+        self._send_json(data)
+
+    def _serve_hardware_detail(self, asset_id: str) -> None:
+        if not asset_id:
+            return self._send_json({"error": "asset_id required"}, status=400)
+        with contextlib.closing(iv.get_db(SERVER_DB_PATH)) as conn:
+            data = iv.hardware_detail(conn, asset_id)
+        if data is None:
+            return self._send_json({"error": f"asset not found: {asset_id}"}, status=404)
+        self._send_json(data)
 
     def _serve_identity_links(self, params: dict[str, list[str]], is_local: bool) -> None:
         with contextlib.closing(iv.get_db(SERVER_DB_PATH)) as conn:
