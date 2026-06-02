@@ -630,6 +630,12 @@ def hardware_facets(conn: sqlite3.Connection) -> dict[str, Any]:
     ) if row["mount_uuid"]]
     connected_count = sum(1 for u in db_uuids if u in connected_uuids)
 
+    # Synthetic live status — surfaced as a filterable Status value. hardware_list
+    # special-cases status == "connected" via a post-fetch live check (the DB has
+    # no 'connected' status; it's derived from live mount/statvfs state). Placed
+    # first so it leads the Status dropdown, matching this function's docstring.
+    statuses = {"connected": connected_count, **statuses}
+
     return {
         "types": types,
         "statuses": statuses,
