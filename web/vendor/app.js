@@ -397,9 +397,46 @@ $('#venture-stage-filter').addEventListener('change', () => loadVentures());
 // the whole render, leaving the Hardware tab blank.
 let _hwSelectedAssetId = null;
 
+// Populate the four hardware filter dropdowns from /api/hardware/facets.
+// Backend returns complete facet counts; the dropdowns were previously
+// hardcoded/empty. Runs once — re-fill would clobber the live selection.
+let _hwFacetsLoaded = false;
+async function populateHwFacets() {
+  if (_hwFacetsLoaded) return;
+  let f;
+  try { f = await api('/api/hardware/facets'); }
+  catch { return; }  // leave static fallbacks; non-fatal
+  const fill = (sel, obj) => {
+    const el = $(sel);
+    if (!el || !obj) return;
+    const cur = el.value;
+    el.innerHTML = '<option value="">all</option>' +
+      Object.entries(obj)
+        .map(([k, n]) => `<option value="${escapeHtml(k)}">${escapeHtml(k)} (${escapeHtml(String(n))})</option>`)
+        .join('');
+    el.value = cur;  // preserve any active selection
+  };
+  fill('#hw-type-filter', f.types);
+  fill('#hw-status-filter', f.statuses);
+  fill('#hw-location-filter', f.locations);
+  fill('#hw-internality-filter', f.internalities);
+  _hwFacetsLoaded = true;
+}
+
 async function loadHardware() {
-  const t = $('#hw-type-filter').value;
-  const data = await api('/api/hardware' + (t ? `?type=${encodeURIComponent(t)}` : ''));
+  await populateHwFacets();
+  // Send EVERY active filter — backend hardware_list accepts type, q,
+  // status, location, internality. Previously only `type` was sent, so
+  // the other three dropdowns + the search box did nothing.
+  const params = new URLSearchParams();
+  const set = (key, sel) => { const v = $(sel).value.trim(); if (v) params.set(key, v); };
+  set('type', '#hw-type-filter');
+  set('status', '#hw-status-filter');
+  set('location', '#hw-location-filter');
+  set('internality', '#hw-internality-filter');
+  set('q', '#hw-q');
+  const qs = params.toString();
+  const data = await api('/api/hardware' + (qs ? '?' + qs : ''));
   const grouped = data.grouped || {};
   const html = Object.entries(grouped).map(([type, rows]) => `
     <div class="ui-card !p-0 overflow-hidden">
