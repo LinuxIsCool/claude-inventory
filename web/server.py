@@ -369,6 +369,59 @@ class InventoryHandler(BaseHTTPRequestHandler):
             pass
 
 
+# ──────────────────────────── Mode B kernel factory ────────────────────────────
+#
+# build_kernel() lets the claude-webui Platform mount inventory at
+# :8800/inventory/ alongside the other surfacing/capture substrates. The
+# kernel path uses InventoryAccessor + InventoryHandler (kernel-pattern);
+# the legacy standalone main() below still uses the in-file InventoryHandler
+# at :8830/. Both read the same inventory.db via inventory_data.py.
+#
+# Imports are lazy (inside build_kernel) so Mode A standalone — launched as
+# `python web/server.py`, where claude_webui is NOT on sys.path — keeps
+# working without the shell installed.
+
+
+def build_kernel(port: int = DEFAULT_PORT, bind: str = "127.0.0.1"):
+    """Construct (don't start) the inventory kernel for Platform mounting.
+
+    Mirrors the claude-youtube/claude-voice build_kernel() factory contract
+    the Platform bootstrap (scripts/webui_platform.py) calls with port=0.
+    """
+    from claude_webui.kernel import WebuiKernel
+
+    from inventory_accessor import InventoryAccessor
+    from inventory_handler import InventoryHandler
+
+    class InventoryKernel(WebuiKernel):
+        """claude-inventory webui kernel — read-only over inventory.db."""
+
+        slug = "inventory"
+        title = "Inventory"
+
+        def _make_handler_class(self) -> type:
+            accessor = self.accessor
+            static_dir = self.static_dir
+            event_bus = self._event_bus
+            mutation_catalog = self._mutation_catalog
+
+            class _Handler(InventoryHandler):
+                pass
+
+            _Handler.accessor = accessor  # type: ignore[assignment]
+            _Handler.static_dir = static_dir
+            _Handler.event_bus = event_bus
+            _Handler.mutation_catalog = mutation_catalog
+            return _Handler
+
+    return InventoryKernel(
+        accessor=InventoryAccessor(db_path=SERVER_DB_PATH),
+        port=port,
+        bind=bind,
+        static_dir=WEB_DIR,
+    )
+
+
 # ──────────────────────────── entrypoint ────────────────────────────
 
 

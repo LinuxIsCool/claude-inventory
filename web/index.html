@@ -67,7 +67,8 @@
     .bar-fill.live { box-shadow: 0 0 6px #94e2d544; }
 
     /* Hardware drawer (right sidecar — non-modal, slides in) */
-    .hw-drawer { position: fixed; top: 0; right: 0; height: 100vh; width: 440px;
+    .hw-drawer { position: fixed; top: var(--legion-embedded-bar-height, 0); right: 0;
+                 height: calc(100vh - var(--legion-embedded-bar-height, 0)); width: 440px;
                  max-width: 90vw; background: #161622; border-left: 1px solid #2a2a3e;
                  box-shadow: -8px 0 24px rgba(0,0,0,0.4); transform: translateX(105%);
                  transition: transform .25s ease-out; z-index: 50; overflow-y: auto;
@@ -367,10 +368,11 @@
 
   <footer class="text-center py-6 font-mono text-[11px] text-gray-600">
     backlog-427 · v0.1.0 · read-only ·
-    <a href="/healthz" target="_blank">healthz</a> ·
-    <a href="/api/overview" target="_blank">api</a>
+    <a href="healthz" target="_blank">healthz</a> ·
+    <a href="api/overview" target="_blank">api</a>
   </footer>
 
-  <script src="/vendor/app.js?v=5"></script>
+  <script src="static/embedded-bar.js"></script>
+  <script src="vendor/app.js?v=7"></script>
 </body>
 </html>

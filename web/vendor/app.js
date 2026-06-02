@@ -35,9 +35,15 @@ function privacyBadge(cls) {
   return `<span class="badge badge-${safe}">${safe}</span>`;
 }
 
+// Mode-B mount base: in standalone (Mode A) pathname is '/', base ''.
+// When mounted at /inventory/ (Mode B) base becomes '/inventory' so
+// root-absolute API paths keep the mount prefix instead of dropping it.
+const API_BASE = location.pathname.replace(/\/(index\.html)?$/, '');
+
 async function api(path) {
   try {
-    const res = await fetch(path, { headers: { 'Accept': 'application/json' } });
+    const url = path.startsWith('/') ? API_BASE + path : path;
+    const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     return data;
@@ -384,6 +390,12 @@ function renderVenturesTable(rows) {
 $('#venture-stage-filter').addEventListener('change', () => loadVentures());
 
 // ──────────────────────────── hardware ────────────────────────────
+
+// Selected hardware row (drawer state). MUST be declared — it is read in
+// loadHardware()'s row render (line ~409) before any selection happens.
+// Under 'use strict' an undeclared read throws ReferenceError and aborts
+// the whole render, leaving the Hardware tab blank.
+let _hwSelectedAssetId = null;
 
 async function loadHardware() {
   const t = $('#hw-type-filter').value;
